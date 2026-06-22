@@ -1,35 +1,47 @@
+/* IMPORTS */
 #include "time.h"
 
-uint32_t loctimestamp;  // local time stamp ( Recup from php get msg = unix time in seconds since 1/1/1970)
-uint32_t lastupdate;    // local time stamp ( Recup from php get msg = unix time in seconds since 1/1/1970)
+/* CONSTANTS */
+#define NTP_SYNC_TIME_INTERVAL 86400000  //1d
+#define NTP_SERVER "pool.ntp.org"
+
+/* VARIABLES */
+uint32_t localTimestamp;        //in seconds since 1/1/1970)
+uint32_t lastTimeUpdateMillis;  //localTimestamp update millis
+uint32_t lastTimeSyncMillis;  //time sync millis
 byte timebuf[10];
 
-
-unsigned long getTime() {
+bool syncWithNTP() {
   time_t now;
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
-    //Serial.println("Failed to obtain time");
-    return (0);
+    Serial.println("Failed to obtain time");
+    return false;
   }
   time(&now);
-  return now;
+  localTimestamp = now;
+  return true;
+}
+
+void timeBegin() {
+   configTime(0, 0, NTP_SERVER);
+   syncWithNTP();
 }
 
 void updateTime() {
+  uint32_t now = millis();
+  if(now - lastTimeSyncMillis > NTP_SYNC_TIME_INTERVAL) {
+      //TODO
+      lastTimeSyncMillis = now;
+  }
   
-char locbuf[10] ;
+  localTimestamp = localTimestamp + ((now - lastTimeUpdateMillis) / 1000);
+  lastTimeUpdateMillis = now;
+}
 
-    loctimestamp  = loctimestamp  + ( ( millis() - lastupdate ) / 1000 ) ;  // Timestamp adjust (from connection)
-    lastupdate    = millis() ; 
-    ltoa( loctimestamp, locbuf, 10 ); 
-    Serial.print("---- loctimestamp :"); Serial.println(loctimestamp); 
-    Serial.print("----  timebuf:");
-    for ( int i=0; i < 10   ; i++)
-    {
-        timebuf[i] = locbuf[i];
-        if ( timebuf[i] < 16) {Serial.print("0");}
-        Serial.print(timebuf[i],HEX);
-    }
-    Serial.println(); 
+void updateTimeAndAppend(String &s) {
+  updateTime();
+  char locbuf[10];
+  ltoa(localTimestamp, locbuf, 10); //fun fact, it will broken in 2287 year;)
+  s+=locbuf;
 }

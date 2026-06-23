@@ -1,24 +1,17 @@
-// ESP32 + Arduino IDE
-// Tuya local protocol v3.4 - Step 1: open TCP connection, send Command 3
-// (negotiate session key). This is the first message of the handshake
-// described in GetKey.ino of FrBerger83/EspTuya, reimplemented from scratch
-// using mbedtls (already bundled with the ESP32 Arduino core).
-
 #include "secrets.h"
 #include <WiFi.h>
 #include "LynkTime.h"
 #include "LynkTuya.h"
 
-LynkTuyaDevice<TUYA_V34> plug1(plug1IP,PLUG1KEY);
-LynkTuyaDevice<TUYA_V35> boilerPlug(plugBoilerIP,PLUGBOILERKEY);
+//IPAddress towelip(192, 168, 1, 2);
+//#define TOWELKEY "1234567890ABCDEF"
+//IPAddress boilerIP(192, 168, 1, 3);
+//#define BOILERKEY "1234567890ABCDEF"
 
-WiFiClient client2;
+LynkTuyaDevice<TUYA_V34> plug1(towelip,TOWELKEY);
+LynkTuyaDevice<TUYA_V35> boilerPlug(boilerIP,BOILERKEY);
 
 void setup() {
-  //String s;
-  //s.getBytes(unsigned char *buf, unsigned int bufsize)
-  //client2.read();
-  
   Serial.begin(115200);
   delay(3000);
   connectWifi();

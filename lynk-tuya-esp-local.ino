@@ -10,15 +10,54 @@
 #include "LynkTuya.h"
 
 LynkTuyaDevice<TUYA_V34> plug1(plug1IP,PLUG1KEY);
+LynkTuyaDevice<TUYA_V35> boilerPlug(plugBoilerIP,PLUGBOILERKEY);
 
 WiFiClient client2;
 
 void setup() {
   //String s;
   //s.getBytes(unsigned char *buf, unsigned int bufsize)
+  //client2.read();
+  
   Serial.begin(115200);
   delay(3000);
-  client2.read();
+  connectWifi();
+  timeBegin();
+  //plug1Test();
+  boilerPlug.getStatus();
+  delay(5000);
+
+  updateTime();
+  boilerPlug.turnOn(localTimestamp);
+
+  delay(5000);
+
+  updateTime();
+  boilerPlug.turnOff(localTimestamp);
+
+}
+
+void loop() {
+  delay(100);
+}
+
+void plug1Test() {
+   //if(!plug1.connectToPlug()) return;
+
+  plug1.getStatus();
+
+  delay(5000);
+
+  updateTime();
+  plug1.turnOn(localTimestamp);
+
+  delay(5000);
+
+  updateTime();
+  plug1.turnOff(localTimestamp);
+}
+
+void connectWifi() {
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print(F("Connecting to WiFi"));
   while (WiFi.status() != WL_CONNECTED) {
@@ -30,23 +69,4 @@ void setup() {
   Serial.println(WiFi.localIP());
   WiFi.setSleep(false);  // power-save mode can delay/drop fast LAN replies
 
-  timeBegin();
-
-  //if(!plug1.connectToPlug()) return;
-
-  plug1.getStatus();
-
-  delay(5000);
-
-  updateTime();
-  plug1.enable(localTimestamp);
-
-  delay(5000);
-
-  updateTime();
-  plug1.disable(localTimestamp);
-}
-
-void loop() {
-  delay(100);
 }

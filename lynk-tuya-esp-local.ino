@@ -12,13 +12,7 @@
 LynkTuyaDevice<TUYA_V34> plug1(plug1IP,PLUG1KEY);
 LynkTuyaDevice<TUYA_V35> boilerPlug(plugBoilerIP,PLUGBOILERKEY);
 
-WiFiClient client2;
-
 void setup() {
-  //String s;
-  //s.getBytes(unsigned char *buf, unsigned int bufsize)
-  //client2.read();
-  
   Serial.begin(115200);
   delay(3000);
   connectWifi();

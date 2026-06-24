@@ -30,44 +30,43 @@ public:
     Serial.print("Connecting to plug ");
     Serial.print(_ipAddress);
     Serial.print(':');
-    Serial.println(V34_PORT);
-
+    Serial.print(V34_PORT);
     if (!_client.connect(_ipAddress, V34_PORT)) {
-      Serial.println("TCP connect failed");
+      Serial.println(" - failed");
       return false;
     }
     _client.setNoDelay(true);
-    Serial.println("TCP connected");
+    Serial.println(" - connected");
     return true;
   }
 
-  void handshake() {
+  bool closeConnection() {
+    _client.stop();
+    return true;
+  }
+
+  bool handshake() {
     _sendCommand3();
-    _lastReadOk = false;
-    _readRawResponse();
-    if (!_lastReadOk) return;
-    _parseCommand3Response();
+    if (!_readRawResponse() || !_parseCommand3Response())
+      return false;
     _sendCommand5();
     _calculateSessionKey();
     _seqNo = 3;
   }
 
-
-
-  void getStatus() {
-    if (!_client.connected()) {
-      connectToPlug();
-      handshake();
-      if (!_lastReadOk) return;
-    }
+  bool getStatus(bool autoCloseConnection = true) {
+    if (!_client.connected())
+      if (!connectToPlug() || !handshake())
+        if (autoCloseConnection || closeConnection())
+          return false;
     _sendCommand10();
-    _lastReadOk = false;
-    _readRawResponse();
-    if (!_lastReadOk) return;
-    _parseCommandResponse();
+    if (!_readRawResponse() || !_parseCommandResponse())
+      if (autoCloseConnection || closeConnection())
+        return false;
+    return true;
   }
 
-  void turnOn(uint32_t timestamp) {
+  bool turnOn(uint32_t timestamp, bool autoCloseConnection = true) {
     String json = String(F("{\"protocol\":5,\"t\":"));
     char locbuf[10];
     ltoa(timestamp, locbuf, 10);  //fun fact, it will broken in 2287 year;)
@@ -75,34 +74,30 @@ public:
     //json += timestamp;
     json += F(",\"data\":{\"dps\":{\"1\":true}}}");
 
-
-    if (!_client.connected()) {
-      connectToPlug();
-      handshake();
-      if (!_lastReadOk) return;
-    }
+    if (!_client.connected())
+      if (!connectToPlug() || !handshake())
+        if (autoCloseConnection || closeConnection())
+          return false;
 
     _sendCommand0d(json);
-    _lastReadOk = false;
-    _readRawResponse();
-    if (!_lastReadOk) return;
-    _parseCommandResponse();
+    if (!_readRawResponse() || !_parseCommandResponse())
+      if (autoCloseConnection || closeConnection())
+        return false;
   }
 
-  void turnOff(uint32_t timestamp) {
+  bool turnOff(uint32_t timestamp, bool autoCloseConnection = true) {
     String json = String(F("{\"protocol\":5,\"t\":"));
     json += timestamp;
     json += F(",\"data\":{\"dps\":{\"1\":false}}}");
-    if (!_client.connected()) {
-      connectToPlug();
-      handshake();
-      if (!_lastReadOk) return;
-    }
+    if (!_client.connected())
+      if (!connectToPlug() || !handshake())
+        if (autoCloseConnection || closeConnection())
+          return false;
+
     _sendCommand0d(json);
-    _lastReadOk = false;
-    _readRawResponse();
-    if (!_lastReadOk) return;
-    _parseCommandResponse();
+    if (!_readRawResponse() || !_parseCommandResponse())
+      if (autoCloseConnection || closeConnection())
+        return false;
   }
 
 private:
@@ -231,12 +226,12 @@ private:
     Serial.println();
   }
 
-  void _readRawResponse() {
+  bool _readRawResponse(uint32_t timeoutMs = 5000L) {
     memset(_response_buffer, 0, RESPONSE_BUFFER_SIZE);
     Serial.println("Reading raw response...");
     unsigned long start = millis();
     //unsigned long lastPrint = start;
-    while (millis() - start < 5000) {
+    while (millis() - start < timeoutMs) {
       if (_client.available()) {
         _responseSize = _client.read(_response_buffer, RESPONSE_BUFFER_SIZE);
         Serial.print("Got ");
@@ -244,22 +239,18 @@ private:
         Serial.print(" bytes after ");
         Serial.print(millis() - start);
         Serial.println(" ms:");
-        _lastReadOk = true;
         printHex(_response_buffer, _responseSize);
-
-        return;
+        return true;
       }
-
       //if (millis() - lastPrint > 500) {
       //  Serial.print("...still waiting, connected=");
       //  Serial.println(client.connected());
       //  lastPrint = millis();
       //}
+      return false;
     }
-    _lastReadOk = false;
-    Serial.print(F("no response received within 5s, connected="));
-    Serial.print(_client.connected());
-    Serial.println();
+    Serial.print(F("no response received within timeout, connected="));
+    Serial.println(_client.connected());
   }
 
   void _calculateSessionKey() {
@@ -338,39 +329,37 @@ private:
     printHex(_cmd3_request, 66);
   }
   /*====================================PARSE RESPONSES====================================*/
-  void _parseCommand3Response() {
+  bool _parseCommand3Response() {
     if (_VERSION == TUYA_V34) {
-      _parseCommand3ResponseV34();
+      return _parseCommand3ResponseV34();
     } else if (_VERSION == TUYA_V35) {
-      _parseCommand3ResponseV35();
+      return _parseCommand3ResponseV35();
     }
+    return false;
   }
 
-  void _parseCommand3ResponseV34() {  //tuya device sent packet with command 04 as response on packet with command 03
+  bool _parseCommand3ResponseV34() {  //tuya device sent packet with command 04 as response on packet with command 03
     uint8_t payload[16];              //use only 16/64 that contain remote nonce
     //TODO check response prefix, suffix, crc
-    if (_responseSize < 36) {
-      _lastReadOk = false;
-      return;
-    }
+    if (_responseSize < 36)  //header + payload
+      return false;
     memcpy(payload, _response_buffer + 20, 16);
     Serial.println("Encrypted response payload");
-    printHex(payload, 64);
+    printHex(payload, 16);
     //decrypt only first block, that contain remote nonce
     aesEcbDecrypt(_localKey, payload, 16);
     Serial.println("Decrypted response payload");
-    printHex(payload, 64);
+    printHex(payload, 16);
 
     memcpy(_deviceNonce, payload, 16);
     Serial.println("Device Nonce:");
     printHex(_deviceNonce, 16);
+    return true;
   }
 
-  void _parseCommand3ResponseV35() {  //tuya device sent packet with command 04 as response on packet with command 03
-    if (_responseSize < 98) {         //header + iv 12 + payload 52 + tag +16
-      _lastReadOk = false;
-      return;
-    }
+  bool _parseCommand3ResponseV35() {  //tuya device sent packet with command 04 as response on packet with command 03
+    if (_responseSize < 98)           //header + iv 12 + payload 52 + tag +16
+      return false;
     uint8_t iv[12];
     memcpy(iv, _response_buffer + 18, 12);
     uint8_t payload[52];
@@ -391,21 +380,22 @@ private:
     memcpy(_deviceNonce, decPayload + 4, 16);
     Serial.println("Device Nonce:");
     printHex(_deviceNonce, 16);
+    return true;
   }
 
-  void _parseCommandResponse() {
+  bool _parseCommandResponse() {
     if (_VERSION == TUYA_V34) {
-      _parseCommandResponseV34();
+      return _parseCommandResponseV34();
     } else if (_VERSION == TUYA_V35) {
-      _parseCommandResponseV35();
+      return _parseCommandResponseV35();
     }
+    return false;
   }
 
-  void _parseCommandResponseV34() {
+  bool _parseCommandResponseV34() {
     if (_responseSize < 56) {  //header 16 + retcode 4 + hmac 32 + suffix 4
       Serial.println("Response too short to parse");
-      _lastReadOk = false;
-      return;
+      return false;
     }
 
     uint32_t retcode = ((uint32_t)_response_buffer[16] << 24) | (_response_buffer[17] << 16) | (_response_buffer[18] << 8) | _response_buffer[19];
@@ -414,8 +404,7 @@ private:
 
     if (_responseSize == 56) {
       Serial.println("No payload");
-      _lastReadOk = false;
-      return;
+      return false;
     }
 
     uint8_t pLen = _responseSize - 56;
@@ -430,19 +419,18 @@ private:
     Serial.print("Decrypted JSON: ");
     for (uint8_t i = 0; i < jsonLen; i++) Serial.print((char)payload[i]);
     Serial.println();
+    return true;
   }
 
-  void _parseCommandResponseV35() {
+  bool _parseCommandResponseV35() {
     if (_responseSize < 18) {  //no header
       Serial.println("Response with invalid header");
-      _lastReadOk = false;
-      return;
+      return false;
     }
     uint32_t length = ((uint32_t)_response_buffer[14] << 24) | (_response_buffer[15] << 16) | (_response_buffer[16] << 8) | _response_buffer[17];
     if (_responseSize < 18 + length || length < 29) {  //header + iv + payload + tag
       Serial.println("Response with invalid payload");
-      _lastReadOk = false;
-      return;
+      return false;
     }
     uint8_t iv[12];
     memcpy(iv, _response_buffer + 18, 12);
@@ -464,14 +452,16 @@ private:
     Serial.print("Decrypted Payload: ");
     printHex(decPayload, pLen);
 
-    if(pLen < 4) return;
+    if (pLen < 4) return false;
     uint32_t retcode = ((uint32_t)decPayload[0] << 24) | (decPayload[1] << 16) | (decPayload[2] << 8) | decPayload[3];
     Serial.print("Return code: ");
     Serial.println(retcode);
 
     Serial.print("Decrypted JSON: ");
     for (uint8_t i = 4; i < pLen; i++) Serial.print((char)decPayload[i]);
-    Serial.println();  
+    Serial.println();
+
+    return true;
   }
 
   /*====================================COMMANDS====================================*/
@@ -632,7 +622,7 @@ private:
   }
 
   void _sendCommand0dV34(String json) {
-    if(json.length() > (PAYLOAD_BUFFER_SIZE - 31)) { //15 - v3.4000... prefix and up to 16 pkcs7Pad
+    if (json.length() > (PAYLOAD_BUFFER_SIZE - 31)) {  //15 - v3.4000... prefix and up to 16 pkcs7Pad
       Serial.println("Payload buffer is not enough to store json, increase PAYLOAD_BUFFER_SIZE");
     }
     uint8_t payload[PAYLOAD_BUFFER_SIZE];
@@ -673,8 +663,8 @@ private:
     Serial.println(written);
   }
 
-void _sendCommand0dV35(String json) {
-    if(json.length() > (PAYLOAD_BUFFER_SIZE - 15)) {
+  void _sendCommand0dV35(String json) {
+    if (json.length() > (PAYLOAD_BUFFER_SIZE - 15)) {
       Serial.println("Payload buffer is not enough to store json, increase PAYLOAD_BUFFER_SIZE");
     }
     uint8_t payload[PAYLOAD_BUFFER_SIZE];
@@ -696,7 +686,7 @@ void _sendCommand0dV35(String json) {
     uint8_t encBuf[payloadLen];
     aesGcmEncrypt(_sessionKey, payload, payloadLen, iv, 12, header, 14, encBuf, tag, 16);
 
-    uint8_t _cmd0d_request[payloadLen+50];
+    uint8_t _cmd0d_request[payloadLen + 50];
     memcpy_P(_cmd0d_request, V35_PREFIX_MAGIC, 4);
     memcpy(_cmd0d_request + 4, header, 14);
     memcpy(_cmd0d_request + 18, iv, 12);
@@ -705,15 +695,13 @@ void _sendCommand0dV35(String json) {
     memcpy_P(_cmd0d_request + 46 + payloadLen, V35_SUFFIX_MAGIC, 4);
 
     Serial.print("Sending command 0d ( ");
-    Serial.print(payloadLen+50);
+    Serial.print(payloadLen + 50);
     Serial.println(" ) bytes");
     printHex(_cmd0d_request, 52);
-    size_t written = _client.write(_cmd0d_request, payloadLen+50);
+    size_t written = _client.write(_cmd0d_request, payloadLen + 50);
     Serial.print("Bytes actually written: ");
     Serial.println(written);
   }
-
-
 
   /* VARIABLES*/
   IPAddress _ipAddress;
@@ -722,7 +710,7 @@ void _sendCommand0dV35(String json) {
   //uint8_t _cmd3_payload[32];  //local nonce,PKCS7-padded, AES ECB encrypted with device's local key
   uint8_t _cmd3_request[84];  //84 v34; 66v35
   uint8_t _response_buffer[RESPONSE_BUFFER_SIZE];
-  bool _lastReadOk = true;
+  //bool _lastReadOk = true;
   int _responseSize = 0;
   uint8_t _deviceNonce[16];
   uint8_t _sessionKey[16];
@@ -738,7 +726,7 @@ void _sendCommand0dV35(String json) {
   const uint8_t V34_SUFFIX_MAGIC[4] PROGMEM = { 0x00, 0x00, 0xAA, 0x55 };
   const uint8_t V34_PAYLOAD_PREFIX_MAGIC[15] PROGMEM = { 0x33, 0x2e, 0x34, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };  //3.4 00 00 00 ...
   const uint8_t V35_PAYLOAD_PREFIX_MAGIC[15] PROGMEM = { 0x33, 0x2e, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };  //3.5 00 00 00 ...
-  
+
   //const uint8_t _localNonce[16] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };  //Fixed local nonce used by tinytuya for the handshake
   const uint8_t LOCAL_NONCE_PADDED[32] PROGMEM = { 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
                                                    0x38, 0x39, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66,

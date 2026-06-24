@@ -52,52 +52,52 @@ public:
     _sendCommand5();
     _calculateSessionKey();
     _seqNo = 3;
+    return true;
   }
 
   bool getStatus(bool autoCloseConnection = true) {
     if (!_client.connected())
-      if (!connectToPlug() || !handshake())
-        if (autoCloseConnection || closeConnection())
-          return false;
-    _sendCommand10();
-    if (!_readRawResponse() || !_parseCommandResponse())
-      if (autoCloseConnection || closeConnection())
+      if (!connectToPlug() || !handshake()) {
+        if (autoCloseConnection) closeConnection();
         return false;
+      }
+    _sendCommand10();
+    if (!_readRawResponse() || !_parseCommandResponse()) {
+      if (autoCloseConnection) closeConnection();
+      return false;
+    }
+    if (autoCloseConnection) closeConnection();
     return true;
   }
 
   bool turnOn(uint32_t timestamp, bool autoCloseConnection = true) {
-    String json = String(F("{\"protocol\":5,\"t\":"));
-    char locbuf[10];
-    ltoa(timestamp, locbuf, 10);  //fun fact, it will broken in 2287 year;)
-    json += locbuf;
-    //json += timestamp;
-    json += F(",\"data\":{\"dps\":{\"1\":true}}}");
-
-    if (!_client.connected())
-      if (!connectToPlug() || !handshake())
-        if (autoCloseConnection || closeConnection())
-          return false;
-
-    _sendCommand0d(json);
-    if (!_readRawResponse() || !_parseCommandResponse())
-      if (autoCloseConnection || closeConnection())
-        return false;
+    return turn(timestamp, true, autoCloseConnection);
   }
 
   bool turnOff(uint32_t timestamp, bool autoCloseConnection = true) {
+    return turn(timestamp, false, autoCloseConnection);
+  }
+
+  bool turn(uint32_t timestamp, bool on, bool autoCloseConnection = true) { 
     String json = String(F("{\"protocol\":5,\"t\":"));
     json += timestamp;
-    json += F(",\"data\":{\"dps\":{\"1\":false}}}");
+    json += F(",\"data\":{\"dps\":{\"1\":");
+    json += on ? F("true") : F("false");
+    json+=F("}}}");
+    Serial.print("json =");
+    Serial.println(json);
     if (!_client.connected())
-      if (!connectToPlug() || !handshake())
-        if (autoCloseConnection || closeConnection())
-          return false;
-
-    _sendCommand0d(json);
-    if (!_readRawResponse() || !_parseCommandResponse())
-      if (autoCloseConnection || closeConnection())
+      if (!connectToPlug() || !handshake()) {
+        if (autoCloseConnection) closeConnection();
         return false;
+      }
+    _sendCommand0d(json);
+    if (!_readRawResponse() || !_parseCommandResponse(true)) {
+      if (autoCloseConnection) closeConnection();
+      return false;
+    }
+    if (autoCloseConnection) closeConnection();
+    return true;
   }
 
 private:
@@ -247,10 +247,10 @@ private:
       //  Serial.println(client.connected());
       //  lastPrint = millis();
       //}
-      return false;
     }
     Serial.print(F("no response received within timeout, connected="));
     Serial.println(_client.connected());
+    return false;
   }
 
   void _calculateSessionKey() {
@@ -383,16 +383,16 @@ private:
     return true;
   }
 
-  bool _parseCommandResponse() {
+  bool _parseCommandResponse(bool allowEmptyPayload = false) {
     if (_VERSION == TUYA_V34) {
-      return _parseCommandResponseV34();
+      return _parseCommandResponseV34(allowEmptyPayload);
     } else if (_VERSION == TUYA_V35) {
       return _parseCommandResponseV35();
     }
     return false;
   }
 
-  bool _parseCommandResponseV34() {
+  bool _parseCommandResponseV34(bool allowEmptyPayload = false) {
     if (_responseSize < 56) {  //header 16 + retcode 4 + hmac 32 + suffix 4
       Serial.println("Response too short to parse");
       return false;
@@ -404,7 +404,7 @@ private:
 
     if (_responseSize == 56) {
       Serial.println("No payload");
-      return false;
+      return allowEmptyPayload;
     }
 
     uint8_t pLen = _responseSize - 56;

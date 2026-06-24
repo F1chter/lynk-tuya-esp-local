@@ -4,10 +4,14 @@
 #include "LynkTime.h"
 #include "LynkTuya.h"
 #include "LynkTelegramBot.h"
+#include "ScenarioHelper.h"
 
 
-#define DEFAULT_DELAY_BETWEEN_STEPS 30000  //30s
+#define DEFAULT_DELAY_BETWEEN_STEPS 30000    //30s
+#define DEFAULT_DELAY_BETWEEN_RETRIES 10000  //10s
+#define DELAY_BEFORE_HEATERS 300000          //5m
 #define LED_BUILTIN 8
+#define RETRY_COUNT 3
 
 LynkTuyaDevice<TUYA_V34> towelDryerPlug(towelip, TOWELKEY);
 LynkTuyaDevice<TUYA_V35> riverPlug(riverip, RIVERKEY);
@@ -23,9 +27,52 @@ struct ConfigStruct {
   bool skipHeaters = false;  //skip firstHeaterPlug, secondHeaterPlug, thirdHeaterPlug
 } config;
 LynkFile configFile(&LittleFS, "/config.cfg", 1, &config, sizeof(config));
+
+bool shouldSkip(SkipGroup group) {
+  switch (group) {
+    case SkipGroup::River: return config.skipRiver;
+    case SkipGroup::Heaters: return config.skipHeaters;
+    case SkipGroup::Charge: return config.skipCharge;
+    default: return false;
+  }
+}
+
+#define STEP_COUNT 7
+constexpr ScenarioStep scenario[] = {
+  { "Towel dryer", [](uint32_t ts) {
+     return towelDryerPlug.turnOn(ts);
+   },
+    DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::None },
+  { "River", [](uint32_t ts) {
+     return riverPlug.turnOn(ts);
+   },
+    DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::River },
+  { "Heater 1", [](uint32_t ts) {
+     return firstHeaterPlug.turnOn(ts);
+   },
+    DELAY_BEFORE_HEATERS, SkipGroup::Heaters },
+  { "Heater 2", [](uint32_t ts) {
+     return secondHeaterPlug.turnOn(ts);
+   },
+    DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::Heaters },
+  { "Heater 3", [](uint32_t ts) {
+     return thirdHeaterPlug.turnOn(ts);
+   },
+    DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::Heaters },
+  { "Battery charger", [](uint32_t ts) {
+     return batteryChargerPlug.turnOn(ts);
+   },
+    DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::Charge },
+  { "Boiler", [](uint32_t ts) {
+     return boilerPlug.turnOn(ts);
+   },
+    DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::None }
+};
+
 uint8_t scenarioStep = 0;
 uint32_t lastScenarioStepMillis = 0;
 bool skipChargeFlag = false;
+uint8_t retries = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -51,52 +98,37 @@ void loop() {
   delay(1);
 }
 
-//TODO ENUM and status function
 void tickScenario() {
-  if (scenarioStep > 6) return;
+  if (scenarioStep >= STEP_COUNT) return;
   uint32_t now = millis();
-  if (scenarioStep == 0 && now - lastScenarioStepMillis > DEFAULT_DELAY_BETWEEN_STEPS) {
+  auto& step = scenario[scenarioStep];
+  if (shouldSkip(step.skipGroup)) {
+    scenarioStep++;
+    return;
+  }
+  if (now - lastScenarioStepMillis >= step.delayMs) {
     updateTime();
-    towelDryerPlug.turnOn(localTimestamp);
-    scenarioStep++;
-    lastScenarioStepMillis = now;
-  } else if (scenarioStep == 1 && config.skipRiver) {
-    scenarioStep++;
-  } else if (scenarioStep == 1 && now - lastScenarioStepMillis > DEFAULT_DELAY_BETWEEN_STEPS) {
-    updateTime();
-    riverPlug.turnOn(localTimestamp);
-    scenarioStep++;
-    lastScenarioStepMillis = now;
-  } else if ((scenarioStep == 2 || scenarioStep == 3 || scenarioStep == 4) && config.skipHeaters) {
-    scenarioStep = 5;
-  } else if (scenarioStep == 2 && now - lastScenarioStepMillis > 300000) {  //5m
-    updateTime();
-    firstHeaterPlug.turnOn(localTimestamp);
-    scenarioStep++;
-    lastScenarioStepMillis = now;
-  } else if (scenarioStep == 3 && now - lastScenarioStepMillis > DEFAULT_DELAY_BETWEEN_STEPS) {
-    updateTime();
-    secondHeaterPlug.turnOn(localTimestamp);
-    scenarioStep++;
-    lastScenarioStepMillis = now;
-  } else if (scenarioStep == 4 && now - lastScenarioStepMillis > DEFAULT_DELAY_BETWEEN_STEPS) {
-    updateTime();
-    thirdHeaterPlug.turnOn(localTimestamp);
-    scenarioStep++;
-    lastScenarioStepMillis = now;
-  } else if (scenarioStep == 5 && config.skipCharge) {
-    scenarioStep++;
-  } else if (scenarioStep == 5 && now - lastScenarioStepMillis > DEFAULT_DELAY_BETWEEN_STEPS) {
-    updateTime();
-    batteryChargerPlug.turnOn(localTimestamp);
-    scenarioStep++;
-    lastScenarioStepMillis = now;
-  } else if (scenarioStep == 6 && now - lastScenarioStepMillis > DEFAULT_DELAY_BETWEEN_STEPS) {
-    updateTime();
-    boilerPlug.turnOn(localTimestamp);
-    scenarioStep++;
-    lastScenarioStepMillis = now;
-    digitalWrite(LED_BUILTIN, true);
+    if (step.executeFunction(localTimestamp)) {
+      scenarioStep++;
+      retries = 0;
+      lastScenarioStepMillis = now;
+    } else {
+      retries++;
+      lastScenarioStepMillis += DEFAULT_DELAY_BETWEEN_RETRIES;
+    }
+    if (retries >= RETRY_COUNT) {
+      String s = "Не вдалося виконати крок ";
+      s += step.name;
+      sendToAdmin(s);
+      scenarioStep++;
+      retries = 0;
+      lastScenarioStepMillis = now;
+    }
+
+    if (scenarioStep >= STEP_COUNT) {  //Scenario finished
+      sendToAdmin(F("Виконання сценарію завершено"));
+      digitalWrite(LED_BUILTIN, true);
+    }
   }
 }
 
@@ -149,10 +181,10 @@ void skipHeaters(bool skip) {
 
 void sendStatus() {
   String s = F("Сценарій ");
-  if (scenarioStep > 6) s += F("завершено");
+  if (scenarioStep >= STEP_COUNT) s += F("завершено");
   else {
     s += F("на кроці ");
-    s += scenarioStep;
+    s += scenario[scenarioStep].name;
   }
   sendToChat(s);
 }

@@ -54,3 +54,7 @@ void tickTelegram() {
 void sendToChat(String msg) {
   bot.sendMessage(fb::Message(msg, GROUP_CHAT_ID));
 }
+
+void sendToAdmin(String msg) {
+  bot.sendMessage(fb::Message(msg, ADMIN_CHAT_ID));
+}

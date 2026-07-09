@@ -1,10 +1,10 @@
 #include "secrets.h"
+#include "time.h"
+#include "helper.h"
 #include <WiFi.h>
 #include "LynkFile.h"
-#include "LynkTime.h"
 #include "LynkTuya.h"
 #include "LynkTelegramBot.h"
-#include "ScenarioHelper.h"
 
 
 #define DEFAULT_DELAY_BETWEEN_STEPS 30000    //30s
@@ -39,32 +39,32 @@ bool shouldSkip(SkipGroup group) {
 
 #define STEP_COUNT 7
 constexpr ScenarioStep scenario[] = {
-  { "Towel dryer", [](uint32_t ts) {
-     return towelDryerPlug.turnOn(ts);
+  { "Towel dryer", []() {
+     return towelDryerPlug.turnOn();
    },
     DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::None },
-  { "River", [](uint32_t ts) {
-     return riverPlug.turnOn(ts);
+  { "River", []() {
+     return riverPlug.turnOn();
    },
     DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::River },
-  { "Heater 1", [](uint32_t ts) {
-     return firstHeaterPlug.turnOn(ts);
+  { "Heater 1", []() {
+     return firstHeaterPlug.turnOn();
    },
     DELAY_BEFORE_HEATERS, SkipGroup::Heaters },
-  { "Heater 2", [](uint32_t ts) {
-     return secondHeaterPlug.turnOn(ts);
+  { "Heater 2", []() {
+     return secondHeaterPlug.turnOn();
    },
     DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::Heaters },
-  { "Heater 3", [](uint32_t ts) {
-     return thirdHeaterPlug.turnOn(ts);
+  { "Heater 3", []() {
+     return thirdHeaterPlug.turnOn();
    },
     DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::Heaters },
-  { "Battery charger", [](uint32_t ts) {
-     return batteryChargerPlug.turnOn(ts);
+  { "Battery charger", []() {
+     return batteryChargerPlug.turnOn();
    },
     DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::Charge },
-  { "Boiler", [](uint32_t ts) {
-     return boilerPlug.turnOn(ts);
+  { "Boiler", []() {
+     return boilerPlug.turnOn();
    },
     DEFAULT_DELAY_BETWEEN_STEPS, SkipGroup::None }
 };
@@ -107,8 +107,7 @@ void tickScenario() {
     return;
   }
   if (now - lastScenarioStepMillis >= step.delayMs) {
-    updateTime();
-    if (step.executeFunction(localTimestamp)) {
+    if (step.executeFunction()) {
       scenarioStep++;
       retries = 0;
       lastScenarioStepMillis = now;
@@ -135,18 +134,6 @@ void tickScenario() {
 //TODO track charger
 //Received Payload: {'protocol': 4, 't': 1782206843, 'data': {'dps': {'23': 2148, '21': 611, '22': 1273}}, 'dps': {'23': 2148, '21': 611, '22': 1273}}
 //23 voltage*10, 21 mA, 22 watt*10
-void connectWifi() {
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.print(F("Connecting to WiFi"));
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(300);
-    Serial.print('.');
-  }
-  Serial.println();
-  Serial.print("WiFi connected, IP: ");
-  Serial.println(WiFi.localIP());
-  WiFi.setSleep(false);  // power-save mode can delay/drop fast LAN replies
-}
 
 void rerunScenario() {
   digitalWrite(LED_BUILTIN, false);

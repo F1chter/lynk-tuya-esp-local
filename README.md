@@ -1,201 +1,139 @@
 # lynk-tuya-esp-local
-Control Tuya Devices from ESP32 over local network
+An ESP32-based automation controller that powers on multiple Tuya smart plugs in a predefined sequence with configurable delays, retry handling, and Telegram remote control. It uses after grid appear to not turn on all load simultaneously.
 
-Supported v3.4 and v3.5 devices
+## Features
+
+* Sequential startup of multiple electrical devices
+* Configurable delays between startup steps
+* Automatic retry on failed commands
+* Telegram bot integration
 
 ## Setup:
-1. Use [TinyTuya](https://github.com/jasonacox/tinytuya/) to define device ip and Local Key
+1.Install libs:
+-[LynkTuyaLocal](https://github.com/F1chter/LynkTuyaLocal)
+-[Fastbot2](https://github.com/GyverLibs/FastBot2)
 
-2. Create secrets.h and define next variables:
+2. Use [TinyTuya](https://github.com/jasonacox/tinytuya/) to define device ip and Local Key
+
+3. Create secrets.h and define next variables:
 ```
 IPAddress plug1IP(192, 168, 1, 11); /*device ip, recommended to make it predefined on router */
 #define PLUG1KEY "$`pfDH'nzZKIe]|]" /*local key from tinyTuya */
 #define WIFI_SSID "MY_WIFI"
 #define WIFI_PASS "MY_PASSWORD"
-
+#define BOT_TOKEN "123456789:AABBCCDDEEFFAABBCCDDEEFFAABBCCDDEEFF" //from FatherBot
+#define ADMIN_CHAT_ID "123456789"
+#define GROUP_CHAT_ID "-123456789"
 ```
 
-## `LynkTuya.h`
 
-`LynkTuyaDevice` is a template class for controlling Tuya LAN devices that use the **3.4** or **3.5** protocol directly over TCP without relying on the Tuya cloud.
 
-The class implements the complete LAN communication flow:
 
-* TCP connection management
-* Tuya authentication handshake
-* Session key generation
-* AES encryption/decryption
-* HMAC-SHA256 authentication (v3.4)
-* AES-GCM authenticated encryption (v3.5)
-* Device status requests
-* Power on/off commands
+## Scenario Logic
 
-## Template Parameter
+Each step consists of:
 
-```cpp
-template<TuyaProtocolVersion VERSION>
-class LynkTuyaDevice;
-```
-
-Supported protocol versions:
-
-```cpp
-enum TuyaProtocolVersion {
-    TUYA_V34,
-    TUYA_V35
-};
-```
+* Device name
+* Function that turns the device on
+* Delay before execution
+* Optional skip group
 
 Example:
 
-```cpp
-LynkTuyaDevice<TUYA_V34> plug1(ip1, localKey1);
-LynkTuyaDevice<TUYA_V35> plug2(ip2, localKey2);
 ```
-
-| Parameter   | Description                                            |
-| ----------- | ------------------------------------------------------ |
-| `ipAddress` | IP address of the Tuya device.                         |
-| `localKey`  | 16-byte Local Key obtained from tinyTuya. |
-
-The constructor prepares the protocol-specific handshake packet, so it only needs to be generated once.
-
----
-
-## Public API
-
-```cpp
-bool connectToPlug();
-```
-
-Opens a TCP connection to the device.
-
-Returns `true` on success.
-
-```cpp
-bool closeConnection();
-```
-
-Closes the TCP connection.
-
-```cpp
-bool handshake();
-```
-
-Performs the Tuya authentication handshake.
-
-This method:
-
-1. Sends Command 3
-2. Receives the device nonce
-3. Sends Command 5
-4. Generates the session key
-
-Must be completed before encrypted commands can be sent.
-
-Returns `true` on success.
-
-```cpp
-bool getStatus(bool autoCloseConnection = true);
-```
-
-Requests the current device status.
-
-If no TCP connection exists, the class automatically:
-
-1. Connects
-2. Performs the handshake
-3. Sends the status request
-
-Returns `true` if a valid response is received.
-
-```cpp
-bool turnOn(uint32_t timestamp,
-            bool autoCloseConnection = true);
-```
-
-Turns the device ON.
-
-The timestamp should be the current Unix time in seconds.
-
-```cpp
-bool turnOff(uint32_t timestamp,
-             bool autoCloseConnection = true);
-```
-
-Turns the device OFF.
-
-```cpp
-bool turn(uint32_t timestamp,
-          bool on,
-          bool autoCloseConnection = true);
-```
-
-Generic method for changing the relay state.
-
-Parameters:
-
-| Parameter             | Description                                                          |
-| --------------------- | -------------------------------------------------------------------- |
-| `timestamp`           | Current Unix timestamp (seconds).                                    |
-| `on`                  | `true` to switch ON, `false` to switch OFF.                          |
-| `autoCloseConnection` | Automatically closes the TCP connection after the command completes. |
-
----
-
-## Connection Behaviour
-
-By default every public command:
-
-1. Opens a TCP connection (if necessary)
-2. Performs the handshake
-3. Executes the command
-4. Closes the connection
-
-To execute multiple commands without reconnecting:
-
-```cpp
-plug.connectToPlug();
-plug.handshake();
-
-plug.getStatus(false);
-plug.turnOn(timestamp, false);
-plug.turnOff(timestamp, false);
-
-plug.closeConnection();
+Heater 2
+ ├─ Wait 30 s
+ ├─ Send ON command
+ ├─ Success → next step
+ └─ Failure → retry
 ```
 
 ---
 
-## Protocol Support
+## Retry Logic
 
-### Tuya v3.4
+If a device fails to turn on:
 
-* AES-128 ECB encryption
-* HMAC-SHA256 packet authentication
-* PKCS#7 padding
+* wait **10 seconds**
+* retry
+* maximum **3 attempts**
 
-### Tuya v3.5
+After three failed attempts:
 
-* AES-128 GCM authenticated encryption
-* No PKCS#7 padding
-* Built-in authentication tag
+* administrator receives a Telegram notification
+* the scenario continues with the next device
 
-The template selects the appropriate implementation at compile time.
+This prevents one faulty device from blocking the entire startup sequence.
 
 ---
 
-## Example
+## Skip Groups
 
-```cpp
-IPAddress ip(192,168,1,100);
+Some devices can be permanently skipped until the setting is changed.
 
-LynkTuyaDevice<TUYA_V35> plug(
-    ip,
-    "0123456789abcdef"
-);
+Available groups:
 
-plug.turnOn(now());
+| Group   | Devices                      |
+| ------- | ---------------------------- |
+| Charge  | Battery charger              |
+| River   | River plug                   |
+| Heaters | Heater 1, Heater 2, Heater 3 |
 
-plug.getStatus();
+The skip configuration is stored in **LittleFS**, so it survives reboots.
+
+---
+
+## Telegram Commands
+
+The firmware exposes several actions through the Telegram bot.
+
+### Status
+
+Returns the current scenario state.
+
+Example:
+
 ```
+Scenario at step Heater 2
+```
+
+or
+
+```
+Scenario finished
+```
+
+---
+
+### Restart Scenario
+
+Resets the scenario to the beginning.
+
+Actions performed:
+
+* turns off completion LED
+* resets current step
+* starts execution from the first device
+
+---
+
+### Enable/Disable Skip Groups
+
+Available for:
+
+* Battery charger
+* River plug
+* Heaters
+
+
+## Timing Constants
+
+| Constant                        | Value | Description                   |
+| ------------------------------- | ----: | ----------------------------- |
+| `DEFAULT_DELAY_BETWEEN_STEPS`   |  30 s | Default delay between devices |
+| `DEFAULT_DELAY_BETWEEN_RETRIES` |  10 s | Retry interval                |
+| `DELAY_BEFORE_HEATERS`          | 5 min | Extra delay before heaters    |
+| `RETRY_COUNT`                   |     3 | Maximum retries               |
+
+---
+
